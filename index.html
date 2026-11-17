@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CloudBite - Cancelled-order rescue demo</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--ink:#14213d;--mut:#5b6678;--org:#e07b00;--grn:#2e9e6a;--red:#d64550;--line:#e2e8f0}
+*{box-sizing:border-box}body{margin:0;font-family:Calibri,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--ink);color:#fff;padding:14px 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header h1{margin:0;font-size:22px}header h1 span{color:var(--org)}
+header .sp{flex:1}select,button{font:inherit}
+select{padding:6px 10px;border-radius:8px;border:0}
+button{border:0;border-radius:8px;padding:7px 12px;cursor:pointer;background:var(--org);color:#fff;font-weight:600}
+button.sec{background:#e9edf4;color:var(--ink)}button.red{background:var(--red)}button.grn{background:var(--grn)}
+button:disabled{opacity:.45;cursor:not-allowed}
+main{padding:18px 24px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.card h2{margin:0 0 10px;font-size:18px;color:var(--org)}
+.stats{grid-column:1/-1;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+.stat b{display:block;font-size:26px;color:var(--grn)}.stat span{color:var(--mut);font-size:13px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border:0}.mut{color:var(--mut);font-size:13px}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:#e9edf4}
+.tag.c{background:#fde4e6;color:var(--red)}.tag.p{background:#fff0d9;color:var(--org)}.tag.r{background:#d9f3e6;color:var(--grn)}
+.note{font-size:13px;color:var(--mut);margin-top:3px}
+.alert{background:#fff7e8;border:1px solid #f3d9a4;border-radius:10px;padding:10px;margin-bottom:8px}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;display:none;max-width:90%;z-index:9}
+.empty{color:var(--mut);font-style:italic;padding:6px 0}
+</style></head><body>
+<header>
+  <h1>Cloud<span>Bite</span> &middot; Cancelled-order rescue</h1><div class="sp"></div>
+  <label>Acting as&nbsp;<select id="who"></select></label>
+  <button class="sec" onclick="resetDemo()">Reset demo</button>
+</header>
+<main>
+  <div class="stats" id="stats"></div>
+  <section class="card"><h2>1. Menu</h2>
+    <label class="mut"><input type="checkbox" id="paid"> Pay online now (mark order as paid)</label>
+    <div id="menu"></div></section>
+  <section class="card"><h2>2. My orders</h2><div id="orders"></div></section>
+  <section class="card"><h2>3. Notifications &amp; nearby offers</h2><div id="offers"></div></section>
+  <section class="card"><h2>4. Charges ledger</h2><div id="ledger"></div></section>
+</main>
+<div id="toast"></div>
+<script>
+let S=null, who=1;
+const $=id=>document.getElementById(id);
+const rs=n=>"Rs "+n;
+function toast(m){const t=$("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",4500)}
+async function api(path,method="GET",body){
+  const r=await fetch("/api"+path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){toast(j.detail||"Something went wrong");throw new Error(j.detail)}
+  return j}
+async function load(){S=await api("/state");render()}
+function render(){
+  const sel=$("who");
+  if(!sel.options.length){S.users.forEach(u=>sel.add(new Option(u.name+" ("+u.area+")",u.id)));sel.onchange=()=>{who=+sel.value;render()}}
+  sel.value=who;
+  const st=S.stats;
+  $("stats").innerHTML=[["late_cancellations","Late cancellations"],["meals_rescued","Meals rescued"],["food_saved_value","Food saved (Rs)"],["charges_recovered","Charges recovered (Rs)"]]
+    .map(([k,l])=>`<div class="stat"><b>${st[k]}</b><span>${l}</span></div>`).join("");
+  $("menu").innerHTML=S.foods.map(f=>`<div class="row"><div><b>${f.name}</b><div class="mut">${f.restaurant} &middot; ${f.area}</div></div>
+    <div>${rs(f.price)} <button onclick="order(${f.id})">Order</button></div></div>`).join("");
+  const mine=S.orders.filter(o=>o.user_id===who);
+  $("orders").innerHTML=mine.length?mine.map(o=>{
+    const active=o.status!=="Cancelled"&&o.status!=="Delivered";
+    const state=o.status==="Cancelled"?`<span class="tag c">Cancelled</span>`:o.preparing?`<span class="tag p">Preparing</span>`:`<span class="tag">Placed</span>`;
+    const wait=!o.preparing&&active?`<div class="note">Cooking starts in ~${Math.ceil(o.seconds_to_prep/60)} min. Cancelling now is free.</div>`:"";
+    return `<div class="row"><div><b>#${o.id} ${o.food_name}</b> ${state} ${o.paid?'<span class="tag r">Paid</span>':'<span class="tag">Unpaid</span>'}
+      <div class="mut">Total ${rs(o.amount)}${o.extra_charge?` (incl. ${rs(o.extra_charge)} earlier charge)`:""}${o.refund?` &middot; Refund ${rs(o.refund)}`:""}</div>
+      ${o.note?`<div class="note">${o.note}</div>`:""}${wait}</div>
+      <div>${active?`${!o.preparing?`<button class="sec" onclick="skip(${o.id})">Skip 5 min</button> `:""}<button class="red" onclick="cancelOrder(${o.id},${o.preparing})">Cancel</button>`:""}</div></div>`}).join(""):`<div class="empty">No orders yet for this user.</div>`;
+  const me=S.users.find(u=>u.id===who);
+  const notes=S.notifications.filter(n=>n.user_id===who);
+  const open=S.offers.filter(o=>o.status==="open");
+  $("offers").innerHTML=(notes.length?notes.slice(0,4).map(n=>`<div class="alert">&#128276; ${n.message}</div>`).join(""):`<div class="empty">No notifications for ${me.name}.</div>`)
+    +`<div class="mut" style="margin:8px 0 4px">Open offers in ${me.area}</div>`
+    +(open.length?open.map(o=>`<div class="row"><div><b>${o.food_name}</b> <span class="mut">${o.restaurant}, ${o.area}</span>
+      <div class="mut"><s>${rs(o.original_price)}</s> <b style="color:var(--grn)">${rs(o.offer_price)}</b></div></div>
+      <button class="grn" onclick="claim(${o.id})">Buy</button></div>`).join(""):`<div class="empty">No open offers.</div>`)
+    +(S.offers.filter(o=>o.status==="sold").map(o=>`<div class="note">Offer #${o.id} (${o.food_name}) sold to ${S.users.find(u=>u.id===o.buyer_id).name} at ${rs(o.offer_price)}.</div>`).join(""));
+  $("ledger").innerHTML=S.charges.length?S.charges.map(c=>`<div class="row"><div>${S.users.find(u=>u.id===c.user_id).name}: <b>${rs(c.amount)}</b>
+    <div class="mut">From cancelled order #${c.from_order}</div></div>
+    <span class="tag ${c.status==="pending"?"p":"r"}">${c.status==="pending"?"Pending, added to next order":"Applied to order #"+c.applied_to_order}</span></div>`).join("")
+    :`<div class="empty">No unpaid-cancellation charges yet. Cancel an unpaid order after cooking starts to see one.</div>`}
+async function order(fid){const id=(await api("/orders","POST",{user_id:who,food_id:fid,paid:$("paid").checked})).order_id;toast("Order #"+id+" placed.");load()}
+async function skip(id){await api("/orders/"+id+"/skip","POST");toast("Pretending 5 minutes passed. Cooking has started.");load()}
+async function cancelOrder(id,late){
+  if(late&&!confirm("Cooking has started. A cancellation charge (30% of the food price) applies. Cancel anyway?"))return;
+  const r=await api("/orders/"+id+"/cancel","POST");
+  toast(r.late?`${r.message} ${r.notified} nearby customer(s) notified.`:r.message);load()}
+async function claim(id){await api("/offers/"+id+"/claim","POST",{user_id:who});toast("Got it! Discounted food ordered.");load()}
+async function resetDemo(){await api("/reset","POST");toast("Demo reset.");load()}
+load();setInterval(()=>{if(!document.hidden)load().catch(()=>{})},2500);
+</script></body></html>
